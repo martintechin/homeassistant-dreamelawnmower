@@ -257,9 +257,9 @@ def test_snapshot_prioritizes_error_activity_but_keeps_paused_state_context() ->
     assert snapshot.activity == "error"
     assert snapshot.state == "paused"
     assert snapshot.error_code == 31
-    assert snapshot.error_name == "left_wheell_speed"
+    assert snapshot.error_name == "unverified_left_wheell_speed"
     assert snapshot.error_text == "Left wheell speed"
-    assert snapshot.error_display == "Left wheel speed"
+    assert snapshot.error_display == "Unverified left wheel speed"
 
 
 def test_snapshot_uses_error_code_label_when_text_says_no_error() -> None:
@@ -290,7 +290,7 @@ def test_snapshot_uses_error_code_label_when_text_says_no_error() -> None:
     assert snapshot.error_code == 31
     assert snapshot.error_name == "no_error"
     assert snapshot.error_text == "No error"
-    assert snapshot.error_display == "Left wheel speed"
+    assert snapshot.error_display == "Unverified left wheel speed"
 
 
 def test_snapshot_falls_back_to_error_code_when_label_is_unknown() -> None:
