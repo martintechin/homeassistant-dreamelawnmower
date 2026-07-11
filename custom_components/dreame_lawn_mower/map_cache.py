@@ -21,7 +21,9 @@ def map_camera_available(
 ) -> bool:
     """Return whether a map camera may expose live or cached map data."""
     if snapshot is None or not getattr(snapshot, "available", False):
-        return False
+        # Keep serving the cached frame while the mower is offline so the
+        # last rendered robot marker stays visible.
+        return image_cached
     if not requires_map_capability:
         return True
     return bool(

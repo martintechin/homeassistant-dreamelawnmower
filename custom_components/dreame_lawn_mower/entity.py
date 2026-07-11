@@ -17,6 +17,7 @@ class DreameLawnMowerEntity(CoordinatorEntity[DreameLawnMowerCoordinator]):
     """Shared base entity for Dreame lawn mower entities."""
 
     _attr_has_entity_name = True
+    _reports_while_offline = False
 
     def __getattribute__(self, name: str) -> Any:
         """Enforce cloud-offline availability across specialized entities."""
@@ -27,7 +28,11 @@ class DreameLawnMowerEntity(CoordinatorEntity[DreameLawnMowerCoordinator]):
                 pass
             else:
                 snapshot = getattr(coordinator, "data", None)
-                if snapshot is not None and not getattr(snapshot, "available", True):
+                if (
+                    snapshot is not None
+                    and not getattr(snapshot, "available", True)
+                    and not object.__getattribute__(self, "_reports_while_offline")
+                ):
                     try:
                         description = object.__getattribute__(
                             self,

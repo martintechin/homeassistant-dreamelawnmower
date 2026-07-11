@@ -67,14 +67,24 @@ def test_map_camera_attributes_include_app_map_summary_counts() -> None:
     assert attributes["app_map_objects"] is None
 
 
-def test_offline_map_camera_does_not_expose_cached_image() -> None:
+def test_offline_map_camera_keeps_serving_cached_image() -> None:
     snapshot = SimpleNamespace(
         available=False,
         mapping_available=True,
         capabilities=("map",),
     )
 
-    assert map_camera_available(snapshot, image_cached=True) is False
+    assert map_camera_available(snapshot, image_cached=True) is True
+
+
+def test_offline_map_camera_without_cached_image_is_unavailable() -> None:
+    snapshot = SimpleNamespace(
+        available=False,
+        mapping_available=True,
+        capabilities=("map",),
+    )
+
+    assert map_camera_available(snapshot, image_cached=False) is False
 
 
 def test_online_diagnostic_map_camera_does_not_require_map_capability() -> None:
@@ -419,3 +429,40 @@ def test_map_camera_cache_stores_error_view() -> None:
     assert cache.last_image is None
     assert cache.last_error == "offline"
     assert cache.last_refresh_at == now
+
+
+def test_offline_camera_returns_cached_image_without_refreshing() -> None:
+    """While the mower is offline, the cached frame is served untouched."""
+    import sys
+    import types
+
+    if "turbojpeg" not in sys.modules:
+        # homeassistant.components.camera imports turbojpeg unconditionally,
+        # but the accelerated JPEG library is absent from the test install.
+        stub = types.ModuleType("turbojpeg")
+        stub.TurboJPEG = object
+        sys.modules["turbojpeg"] = stub
+    from custom_components.dreame_lawn_mower.camera import DreameLawnMowerMapCamera
+
+    cache = DreameLawnMowerMapCameraCache(ttl=timedelta(seconds=60))
+    cache.store_view(
+        DreameLawnMowerMapView(source="app_action_map", image_png=b"png"),
+        now=datetime(2026, 7, 11, 8, 0, tzinfo=UTC) - timedelta(hours=2),
+    )
+    cache.store_image(b"jpeg-last-fix")
+    refresh_calls: list[bool] = []
+
+    entity = object.__new__(DreameLawnMowerMapCamera)
+    entity.coordinator = SimpleNamespace(
+        data=SimpleNamespace(available=False),
+        client=SimpleNamespace(
+            async_refresh_map_view=lambda **kwargs: refresh_calls.append(True),
+        ),
+    )
+    entity._map_cache = cache
+
+    image = asyncio.run(entity._async_get_map_image())
+
+    assert image == b"jpeg-last-fix"
+    assert refresh_calls == []
+    assert cache.last_image == b"jpeg-last-fix"

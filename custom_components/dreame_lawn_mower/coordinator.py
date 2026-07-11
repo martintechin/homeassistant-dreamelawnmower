@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import (
@@ -36,6 +37,11 @@ from .const import (
 from .dreame_lawn_mower_client.models import (
     DreameLawnMowerStatusBlob,
     display_name_for_model,
+)
+from .last_known_position import (
+    LAST_POSITION_STORAGE_VERSION,
+    LastKnownPosition,
+    capture_last_known_position,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -105,6 +111,12 @@ class DreameLawnMowerCoordinator(DataUpdateCoordinator[DreameLawnMowerSnapshot])
         self.selected_spot_id: int | None = None
         self.bluetooth_connected: bool | None = None
         self.runtime_status_blob: DreameLawnMowerStatusBlob | None = None
+        self.last_known_position: LastKnownPosition | None = None
+        self._last_position_store: Store[dict[str, Any]] = Store(
+            hass,
+            LAST_POSITION_STORAGE_VERSION,
+            f"{DOMAIN}.last_position.{entry.entry_id}",
+        )
         self.last_batch_device_data_probe_result: dict[str, Any] | None = None
         self.last_preference_probe_result: dict[str, Any] | None = None
         self.last_preference_write_result: dict[str, Any] | None = None
@@ -149,6 +161,7 @@ class DreameLawnMowerCoordinator(DataUpdateCoordinator[DreameLawnMowerSnapshot])
             _LOGGER.debug("Failed to refresh runtime status blob: %s", err)
             self.runtime_status_blob = None
             self.client.update_runtime_live_tracking(None, active=False)
+        self._capture_last_known_position(snapshot)
         try:
             self.bluetooth_connected = await self.client.async_get_bluetooth_connected(
                 refresh=False,
@@ -166,6 +179,35 @@ class DreameLawnMowerCoordinator(DataUpdateCoordinator[DreameLawnMowerSnapshot])
         await self.async_refresh_maintenance_status(force=False)
         await self.async_refresh_voice_settings(force=False)
         return snapshot
+
+    async def async_load_last_known_position(self) -> None:
+        """Restore the persisted last-known-position fix, if any."""
+        try:
+            data = await self._last_position_store.async_load()
+        except Exception as err:  # noqa: BLE001 - corrupt store must not block setup
+            _LOGGER.debug("Failed to load last known position: %s", err)
+            return
+        restored = LastKnownPosition.from_dict(data)
+        if restored is not None:
+            self.last_known_position = restored
+
+    def _capture_last_known_position(self, snapshot: DreameLawnMowerSnapshot) -> None:
+        """Retain the freshest position fix while the mower is reachable."""
+        candidate = capture_last_known_position(
+            snapshot,
+            self.runtime_status_blob,
+            self.client,
+            datetime.now(UTC),
+        )
+        if candidate is None:
+            return
+        changed = not candidate.same_fix(self.last_known_position)
+        self.last_known_position = candidate
+        if changed:
+            self._last_position_store.async_delay_save(
+                lambda: self.last_known_position.as_dict(),
+                30,
+            )
 
     async def async_refresh_batch_device_data(
         self,

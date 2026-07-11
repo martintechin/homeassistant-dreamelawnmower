@@ -233,6 +233,7 @@ class DreameLawnMower(DreameLawnMowerEntity, LawnMowerEntity):
         available_vector_map_names = self._available_vector_map_names(
             vector_map_details
         )
+        last_known_position = getattr(self.coordinator, "last_known_position", None)
         return {
             "state": snapshot.state,
             "state_name": snapshot.state_name,
@@ -279,6 +280,11 @@ class DreameLawnMower(DreameLawnMowerEntity, LawnMowerEntity):
             "docked": snapshot.docked,
             "raw_docked": snapshot.raw_docked,
             "mapping_available": snapshot.mapping_available,
+            "last_known_position": (
+                last_known_position.as_dict()
+                if last_known_position is not None
+                else None
+            ),
             "scheduled_clean": snapshot.scheduled_clean,
             "shortcut_task": snapshot.shortcut_task,
             "serial_number": snapshot.serial_number,

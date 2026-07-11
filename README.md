@@ -192,6 +192,8 @@ Common user-facing helpers include:
 - `sensor.<device>_runtime_total_area`
 - `sensor.<device>_runtime_live_track_length`
 - `sensor.<device>_runtime_live_track_point_count`
+- `sensor.<device>_last_known_position`
+- `sensor.<device>_position_last_updated`
 - `sensor.<device>_weather_protection_status`
 - `select.<device>_map`
 - `select.<device>_mowing_action`
@@ -220,6 +222,27 @@ them from the entity registry only when troubleshooting:
 - last task-status, weather, and preference probe sensors
 - raw vendor flag sensors
 - manual-drive safety diagnostics
+
+### Last Known Position
+
+When the mower hits an error and powers down before you notice, it drops off
+the Dreame cloud and the native app can no longer show where it is. The
+integration keeps its own record so you can still find the robot:
+
+- `sensor.<device>_last_known_position` retains the last reported map-grid
+  coordinates (`x, y`) and stays available while the mower is offline. Its
+  attributes include the heading, the capture source, and the activity and
+  error state at the moment of capture, plus `device_currently_online` so
+  automations can tell a live fix from a retained one.
+- `sensor.<device>_position_last_updated` is a timestamp sensor showing how
+  old the fix is (Home Assistant renders it as "23 minutes ago").
+- The map cameras keep serving their last rendered frame — including the final
+  robot marker — while the mower is offline instead of becoming unavailable.
+
+The position sensors are persisted to disk and survive Home Assistant
+restarts. The cached camera frame is in-memory only, so after a restart the
+map image is unavailable until the mower comes back online, while the
+coordinate sensors still show the retained fix.
 
 ## Schedules And Multiple Maps
 
