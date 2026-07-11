@@ -297,6 +297,8 @@ async def async_setup_entry(
         + [DreameLawnMowerRuntimePositionXSensor(coordinator)]
         + [DreameLawnMowerRuntimePositionYSensor(coordinator)]
         + [DreameLawnMowerRuntimeHeadingSensor(coordinator)]
+        + [DreameLawnMowerLastKnownPositionSensor(coordinator)]
+        + [DreameLawnMowerLastSeenSensor(coordinator)]
         + [DreameLawnMowerRuntimeTrackPointCountSensor(coordinator)]
         + [DreameLawnMowerRuntimeTrackLengthSensor(coordinator)]
         + [DreameLawnMowerRuntimeTrackSegmentCountSensor(coordinator)]
@@ -2053,6 +2055,83 @@ class DreameLawnMowerRuntimeHeadingSensor(
         return _runtime_status_blob_summary(
             getattr(self.coordinator, "runtime_status_blob", None)
         )
+
+
+class DreameLawnMowerLastKnownPositionSensor(
+    DreameLawnMowerEntity,
+    SensorEntity,
+):
+    """Expose the retained mower position, even while the device is offline."""
+
+    _attr_name = "Last Known Position"
+    _attr_icon = "mdi:map-marker-question-outline"
+    _reports_while_offline = True
+
+    def __init__(self, coordinator: DreameLawnMowerCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._descriptor.unique_id}_last_known_position"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the retained map-grid coordinates as "x, y"."""
+        position = self.coordinator.last_known_position
+        if position is None:
+            return None
+        return f"{position.x}, {position.y}"
+
+    @property
+    def available(self) -> bool:
+        """Return whether a position fix has ever been captured."""
+        return self.coordinator.last_known_position is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the full retained fix plus current connectivity."""
+        position = self.coordinator.last_known_position
+        if position is None:
+            return {}
+        snapshot = self.coordinator.data
+        return {
+            "x": position.x,
+            "y": position.y,
+            "heading_deg": position.heading_deg,
+            "source": position.source,
+            "captured_at": position.captured_at.isoformat(),
+            "activity_at_capture": position.activity,
+            "error_at_capture": position.error_display,
+            "error_code_at_capture": position.error_code,
+            "docked_at_capture": position.docked,
+            "device_currently_online": bool(
+                snapshot is not None and getattr(snapshot, "available", False)
+            ),
+        }
+
+
+class DreameLawnMowerLastSeenSensor(
+    DreameLawnMowerEntity,
+    SensorEntity,
+):
+    """Expose when the retained mower position was last refreshed."""
+
+    _attr_name = "Position Last Updated"
+    _attr_icon = "mdi:map-clock-outline"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _reports_while_offline = True
+
+    def __init__(self, coordinator: DreameLawnMowerCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._descriptor.unique_id}_last_known_position_at"
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return the capture time of the retained position fix."""
+        position = self.coordinator.last_known_position
+        return position.captured_at if position is not None else None
+
+    @property
+    def available(self) -> bool:
+        """Return whether a position fix has ever been captured."""
+        return self.coordinator.last_known_position is not None
 
 
 class DreameLawnMowerRuntimeTrackPointCountSensor(

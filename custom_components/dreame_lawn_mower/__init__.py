@@ -13,6 +13,7 @@ from .services import async_setup_services, async_unload_services
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Dreame lawn mower from a config entry."""
     coordinator = DreameLawnMowerCoordinator(hass, entry)
+    await coordinator.async_load_last_known_position()
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator

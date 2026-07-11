@@ -130,6 +130,11 @@ class DreameLawnMowerMapCamera(
 
     async def _async_get_map_image(self) -> bytes | None:
         """Return a cached map image or refresh it on demand."""
+        snapshot = self.coordinator.data
+        if snapshot is None or not getattr(snapshot, "available", False):
+            # While offline a refresh would fail and wipe the cached frame;
+            # keep returning the last image with the final robot position.
+            return self._map_cache.last_image
         if self._map_cache.last_image is not None and self._map_cache.is_fresh():
             return self._map_cache.last_image
 
