@@ -213,6 +213,7 @@ class DreameLawnMowerClient:
             ...,
         ] = ()
         self._last_runtime_track_blob_hex: str | None = None
+        self._last_known_position_hint: tuple[int, int] | None = None
         self._latest_cloud_device_info: Mapping[str, Any] | None = None
         self._cloud_device_info_refreshed_at = 0.0
 
@@ -225,6 +226,17 @@ class DreameLawnMowerClient:
     def device(self) -> Any | None:
         """Return the currently connected upstream device instance."""
         return self._device
+
+    def update_last_known_position(
+        self,
+        position: tuple[int, int] | None,
+    ) -> None:
+        """Retain the freshest position fix for map-marker rendering.
+
+        None is ignored so a lost signal never erases the retained fix.
+        """
+        if position is not None:
+            self._last_known_position_hint = position
 
     def update_runtime_live_tracking(
         self,
@@ -1910,7 +1922,9 @@ class DreameLawnMowerClient:
             ),
             app_view,
         )
-        if _map_view_has_live_path(vector_view):
+        if _map_view_has_live_path(vector_view) or _map_view_shows_robot_position(
+            vector_view
+        ):
             return vector_view
 
         if app_view.available and app_view.image_png is not None:
@@ -1999,12 +2013,18 @@ class DreameLawnMowerClient:
                     path_point_count=summary.path_point_count
                     + runtime_track_point_count,
                 )
+        runtime_position = _runtime_blob_position(runtime_blob)
+        if runtime_position is not None:
+            details["position_marker"] = "runtime_pose"
+        elif self._last_known_position_hint is not None:
+            details["position_marker"] = "last_known"
         try:
             image_png = render_vector_map_png(
                 vector_map,
                 label_scale=label_scale,
                 runtime_track_segments=runtime_track_segments,
-                runtime_position=_runtime_blob_position(runtime_blob),
+                runtime_position=runtime_position,
+                last_known_position=self._last_known_position_hint,
             )
         except Exception as err:  # noqa: BLE001 - diagnostics path
             return DreameLawnMowerMapView(
@@ -5613,6 +5633,18 @@ def _map_view_has_live_path(map_view: DreameLawnMowerMapView) -> bool:
         return False
 
     return bool(details.get("has_live_path"))
+
+
+def _map_view_shows_robot_position(map_view: DreameLawnMowerMapView) -> bool:
+    """Return whether a map view renders a live or retained robot marker."""
+    if not map_view.available or map_view.image_png is None:
+        return False
+
+    details = map_view.details
+    if not isinstance(details, Mapping):
+        return False
+
+    return bool(details.get("position_marker"))
 
 
 def _normalize_contour_ids(

@@ -81,7 +81,7 @@ def test_a2_paused_fixture_keeps_optional_entities_opt_in() -> None:
     sensors = {description.name: description for description in SENSORS}
     binary_sensors = {description.name: description for description in BINARY_SENSORS}
 
-    assert sensors["Cleaning Mode"].entity_registry_enabled_default is False
+    assert sensors["Mowing Mode"].entity_registry_enabled_default is False
     assert binary_sensors["Child Lock"].entity_registry_enabled_default is False
     assert binary_sensors["Shortcut Task"].entity_registry_enabled_default is False
 
