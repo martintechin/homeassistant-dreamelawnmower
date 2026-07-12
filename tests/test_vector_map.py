@@ -505,3 +505,92 @@ def test_vector_map_view_falls_back_when_map_list_errors() -> None:
     assert view.summary.map_id == 0
     assert view.details is not None
     assert view.details["map_index"] == 0
+
+
+def test_vector_map_renderer_draws_last_known_position_marker() -> None:
+    vector_map = parse_batch_vector_map(_batch_payload())
+
+    base_png = render_vector_map_png(vector_map)
+    marked_png = render_vector_map_png(vector_map, last_known_position=(50, 40))
+    live_png = render_vector_map_png(vector_map, runtime_position=(50, 40))
+    live_with_hint_png = render_vector_map_png(
+        vector_map,
+        runtime_position=(50, 40),
+        last_known_position=(10, 20),
+    )
+
+    assert base_png is not None
+    assert marked_png is not None
+    assert marked_png != base_png
+    # A live pose wins over the retained fix, so the hint changes nothing.
+    assert live_with_hint_png == live_png
+
+
+def test_vector_map_view_marks_retained_position_marker() -> None:
+    client = _client()
+    client._sync_get_vector_map_batch_data = lambda: _batch_payload()
+    client._safe_map_diagnostics = lambda **kwargs: None
+
+    baseline = client._sync_refresh_vector_map_view()
+    client.update_last_known_position((50, 40))
+    retained = client._sync_refresh_vector_map_view()
+
+    assert "position_marker" not in baseline.details
+    assert retained.details["position_marker"] == "last_known"
+    assert retained.image_png != baseline.image_png
+
+    client.update_runtime_live_tracking(
+        SimpleNamespace(
+            hex="runtime-1",
+            candidate_runtime_track_segments=(),
+            candidate_runtime_pose_x=50,
+            candidate_runtime_pose_y=40,
+            candidate_runtime_heading_deg=90.0,
+        ),
+        active=True,
+    )
+    live = client._sync_refresh_vector_map_view()
+
+    assert live.details["position_marker"] == "runtime_pose"
+
+
+def test_client_retains_last_known_position_hint() -> None:
+    client = _client()
+
+    client.update_last_known_position((50, 40))
+    client.update_last_known_position(None)
+
+    assert client._last_known_position_hint == (50, 40)
+
+
+def test_map_view_shows_robot_position_predicate() -> None:
+    from custom_components.dreame_lawn_mower.dreame_lawn_mower_client.client import (
+        _map_view_shows_robot_position,
+    )
+    from dreame_lawn_mower_client.models import (
+        DreameLawnMowerMapSummary,
+        DreameLawnMowerMapView,
+    )
+
+    summary = DreameLawnMowerMapSummary(available=True)
+    marked = DreameLawnMowerMapView(
+        source="batch_vector_map",
+        summary=summary,
+        image_png=b"png",
+        details={"position_marker": "last_known"},
+    )
+    unmarked = DreameLawnMowerMapView(
+        source="batch_vector_map",
+        summary=summary,
+        image_png=b"png",
+        details={},
+    )
+    no_image = DreameLawnMowerMapView(
+        source="batch_vector_map",
+        summary=summary,
+        details={"position_marker": "last_known"},
+    )
+
+    assert _map_view_shows_robot_position(marked) is True
+    assert _map_view_shows_robot_position(unmarked) is False
+    assert _map_view_shows_robot_position(no_image) is False

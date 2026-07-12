@@ -40,6 +40,7 @@ from .dreame_lawn_mower_client.models import (
 )
 from .last_known_position import (
     LAST_POSITION_STORAGE_VERSION,
+    SOURCE_RUNTIME_POSE,
     LastKnownPosition,
     capture_last_known_position,
 )
@@ -190,6 +191,18 @@ class DreameLawnMowerCoordinator(DataUpdateCoordinator[DreameLawnMowerSnapshot])
         restored = LastKnownPosition.from_dict(data)
         if restored is not None:
             self.last_known_position = restored
+            self._push_position_render_hint(restored)
+
+    def _push_position_render_hint(self, position: LastKnownPosition) -> None:
+        """Feed the map renderer a marker position for retained fixes.
+
+        Only runtime poses share the vector map's coordinate frame; legacy
+        map fallbacks are recorded in the sensor but never drawn.
+        """
+        if position.source == SOURCE_RUNTIME_POSE:
+            self.client.update_last_known_position(
+                (int(position.x), int(position.y))
+            )
 
     def _capture_last_known_position(self, snapshot: DreameLawnMowerSnapshot) -> None:
         """Retain the freshest position fix while the mower is reachable."""
@@ -203,6 +216,7 @@ class DreameLawnMowerCoordinator(DataUpdateCoordinator[DreameLawnMowerSnapshot])
             return
         changed = not candidate.same_fix(self.last_known_position)
         self.last_known_position = candidate
+        self._push_position_render_hint(candidate)
         if changed:
             self._last_position_store.async_delay_save(
                 lambda: self.last_known_position.as_dict(),

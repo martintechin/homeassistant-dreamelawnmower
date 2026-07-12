@@ -236,8 +236,12 @@ integration keeps its own record so you can still find the robot:
   automations can tell a live fix from a retained one.
 - `sensor.<device>_position_last_updated` is a timestamp sensor showing how
   old the fix is (Home Assistant renders it as "23 minutes ago").
-- The map cameras keep serving their last rendered frame — including the final
-  robot marker — while the mower is offline instead of becoming unavailable.
+- The rendered map draws the retained fix as an orange ring (a solid dot means
+  live telemetry), so the last known location is visible on the map even when
+  the mower is idle, in an error state, or offline. The map camera prefers the
+  vector map view whenever a position marker can be drawn.
+- The map cameras keep serving their last rendered frame — including the
+  position marker — while the mower is offline instead of becoming unavailable.
 
 The position sensors are persisted to disk and survive Home Assistant
 restarts. The cached camera frame is in-memory only, so after a restart the

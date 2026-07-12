@@ -238,6 +238,7 @@ def render_vector_map_png(
     label_scale: float = 1.0,
     runtime_track_segments: Sequence[Sequence[tuple[int, int]]] | None = None,
     runtime_position: tuple[int, int] | None = None,
+    last_known_position: tuple[int, int] | None = None,
 ) -> bytes | None:
     """Render a mower vector map to PNG bytes."""
     if vector_map is None or vector_map.boundary is None:
@@ -328,6 +329,16 @@ def render_vector_map_png(
     if runtime_position is not None:
         px, py = to_pixel(runtime_position[0], runtime_position[1])
         draw.ellipse((px - 6, py - 6, px + 6, py + 6), fill=_RUNTIME_POSITION_COLOR)
+    elif last_known_position is not None:
+        # Retained fix from a previous session: a ring instead of a solid dot
+        # so a stale position is distinguishable from live telemetry.
+        px, py = to_pixel(last_known_position[0], last_known_position[1])
+        draw.ellipse(
+            (px - 8, py - 8, px + 8, py + 8),
+            outline=_RUNTIME_POSITION_COLOR,
+            width=3,
+        )
+        draw.ellipse((px - 2, py - 2, px + 2, py + 2), fill=_RUNTIME_POSITION_COLOR)
 
     for zone in vector_map.zones:
         if len(zone.points) < 3 or not zone.name:

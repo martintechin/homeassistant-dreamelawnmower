@@ -44,7 +44,7 @@ def _blob(x=None, y=None, heading=None) -> SimpleNamespace:
 
 
 def _client(robot_position=None, charger_position=None) -> SimpleNamespace:
-    return SimpleNamespace(
+    client = SimpleNamespace(
         device=SimpleNamespace(
             status=SimpleNamespace(
                 current_map=SimpleNamespace(
@@ -52,8 +52,11 @@ def _client(robot_position=None, charger_position=None) -> SimpleNamespace:
                     charger_position=charger_position,
                 )
             )
-        )
+        ),
+        position_updates=[],
     )
+    client.update_last_known_position = client.position_updates.append
+    return client
 
 
 def _fix(**overrides) -> LastKnownPosition:
@@ -254,6 +257,7 @@ def test_capture_updates_position_and_schedules_save() -> None:
 
     assert coordinator.last_known_position is not None
     assert coordinator.last_known_position.x == 5910
+    assert coordinator.client.position_updates == [(5910, 12400)]
     assert len(coordinator._last_position_store.delay_saves) == 1
     data_fn, delay = coordinator._last_position_store.delay_saves[0]
     assert data_fn() == coordinator.last_known_position.as_dict()
@@ -287,6 +291,7 @@ def test_capture_keeps_previous_fix_when_signal_is_lost() -> None:
 
 def test_load_restores_persisted_fix() -> None:
     coordinator = _bare_coordinator()
+    coordinator.client = _client()
     stored = _fix().as_dict()
 
     async def _load():
@@ -297,6 +302,7 @@ def test_load_restores_persisted_fix() -> None:
     asyncio.run(coordinator.async_load_last_known_position())
 
     assert coordinator.last_known_position == _fix()
+    assert coordinator.client.position_updates == [(5910, 12400)]
 
 
 def test_load_tolerates_missing_or_corrupt_store() -> None:
@@ -371,3 +377,19 @@ def test_last_seen_sensor_unavailable_before_first_fix() -> None:
 
     assert entity.available is False
     assert entity.native_value is None
+
+
+def test_legacy_map_fix_is_recorded_but_not_pushed_to_renderer() -> None:
+    coordinator = _bare_coordinator()
+    coordinator.runtime_status_blob = None
+    coordinator.client = _client(
+        robot_position=SimpleNamespace(x=480.5, y=260.0, a=None)
+    )
+
+    coordinator._capture_last_known_position(_snapshot())
+
+    assert coordinator.last_known_position is not None
+    assert coordinator.last_known_position.source == SOURCE_MAP_ROBOT_POSITION
+    # Legacy map coordinates are not verified against the vector map frame,
+    # so no marker hint is sent to the renderer.
+    assert coordinator.client.position_updates == []
