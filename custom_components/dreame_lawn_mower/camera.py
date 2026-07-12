@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from functools import partial
@@ -12,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.storage import STORAGE_DIR
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_MAP_LABEL_SCALE, DEFAULT_MAP_LABEL_SCALE, DOMAIN
@@ -25,7 +27,12 @@ from .image import (
     png_bytes_to_jpeg,
 )
 from .map_attributes import map_camera_attributes
-from .map_cache import DreameLawnMowerMapCameraCache, map_camera_available
+from .map_cache import (
+    DreameLawnMowerMapCameraCache,
+    load_cached_frame,
+    map_camera_available,
+    save_cached_frame,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _MAP_CACHE_TTL = timedelta(seconds=60)
@@ -42,9 +49,18 @@ async def async_setup_entry(
     coordinator: DreameLawnMowerCoordinator = hass.data[DOMAIN][entry.entry_id]
     map_cache = DreameLawnMowerMapCameraCache(ttl=_MAP_CACHE_TTL)
     live_map_cache = DreameLawnMowerMapCameraCache(ttl=_MAP_CACHE_TTL)
+    frame_path = hass.config.path(
+        STORAGE_DIR,
+        f"{DOMAIN}.map_frame.{entry.entry_id}.jpg",
+    )
+    restored_frame = await hass.async_add_executor_job(load_cached_frame, frame_path)
+    if restored_frame is not None:
+        image, saved_at = restored_frame
+        map_cache.store_image(image)
+        map_cache.last_refresh_at = saved_at
     async_add_entities(
         [
-            DreameLawnMowerMapCamera(coordinator, map_cache),
+            DreameLawnMowerMapCamera(coordinator, map_cache, frame_path=frame_path),
             DreameLawnMowerLivePathMapCamera(coordinator, live_map_cache),
             DreameLawnMowerAllMapsCamera(coordinator, map_cache),
             DreameLawnMowerMapDataCamera(coordinator, map_cache),
@@ -69,6 +85,8 @@ class DreameLawnMowerMapCamera(
         self,
         coordinator: DreameLawnMowerCoordinator,
         map_cache: DreameLawnMowerMapCameraCache,
+        *,
+        frame_path: str | None = None,
     ) -> None:
         Camera.__init__(self)
         CoordinatorEntity.__init__(self, coordinator)
@@ -78,6 +96,9 @@ class DreameLawnMowerMapCamera(
         self._attr_model = self._descriptor.display_model
         self.content_type = "image/jpeg"
         self._map_cache = map_cache
+        self._frame_path = frame_path
+        self._last_persisted_frame: bytes | None = None
+        self._map_refresh_task: asyncio.Task | None = None
 
     @property
     def available(self) -> bool:
@@ -129,15 +150,35 @@ class DreameLawnMowerMapCamera(
         return await self._async_get_map_image()
 
     async def _async_get_map_image(self) -> bytes | None:
-        """Return a cached map image or refresh it on demand."""
+        """Return a cached map image, refreshing stale frames in the background."""
         snapshot = self.coordinator.data
         if snapshot is None or not getattr(snapshot, "available", False):
             # While offline a refresh would fail and wipe the cached frame;
             # keep returning the last image with the final robot position.
             return self._map_cache.last_image
-        if self._map_cache.last_image is not None and self._map_cache.is_fresh():
-            return self._map_cache.last_image
+        cached = self._map_cache.last_image
+        if cached is not None:
+            if not self._map_cache.is_fresh():
+                self._schedule_background_map_refresh()
+            return cached
+        return await self._async_fetch_map_image()
 
+    def _schedule_background_map_refresh(self) -> None:
+        """Refresh the map without blocking the dashboard image request."""
+        if self._map_refresh_task is not None and not self._map_refresh_task.done():
+            return
+        self._map_refresh_task = self.hass.async_create_task(
+            self._async_background_map_refresh()
+        )
+
+    async def _async_background_map_refresh(self) -> None:
+        try:
+            await self._async_fetch_map_image()
+        except Exception as err:  # noqa: BLE001 - stale frame keeps serving
+            _LOGGER.debug("Background Dreame mower map refresh failed: %s", err)
+
+    async def _async_fetch_map_image(self) -> bytes | None:
+        """Fetch, render, cache, and persist a fresh map frame."""
         view = await self._async_refresh_map_view()
         if view.image_png is not None:
             try:
@@ -148,6 +189,7 @@ class DreameLawnMowerMapCamera(
                 self._map_cache.store_image(image)
                 self._map_cache.last_error = None
                 self.async_write_ha_state()
+                await self._async_persist_frame(image)
                 return image
             except Exception as err:
                 _LOGGER.warning("Failed to convert Dreame mower map image: %s", err)
@@ -161,6 +203,17 @@ class DreameLawnMowerMapCamera(
                 map_placeholder_jpeg,
                 detail=self._map_cache.last_error or view.error,
             )
+        )
+
+    async def _async_persist_frame(self, image: bytes) -> None:
+        """Write the latest frame to disk so it survives restarts."""
+        if self._frame_path is None or image == self._last_persisted_frame:
+            return
+        self._last_persisted_frame = image
+        await self.hass.async_add_executor_job(
+            save_cached_frame,
+            self._frame_path,
+            image,
         )
 
     async def _async_refresh_map_view(self) -> DreameLawnMowerMapView:

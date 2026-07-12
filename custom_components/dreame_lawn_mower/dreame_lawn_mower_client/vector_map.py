@@ -326,19 +326,58 @@ def render_vector_map_png(
         px, py = to_pixel(point[0], point[1])
         draw.ellipse((px - 4, py - 4, px + 4, py + 4), fill=_POINT_COLOR)
 
+    # Size the robot marker relative to the canvas so it stays visible when
+    # the rendered image is scaled down to a dashboard card.
+    marker_radius = max(8, int(round(min(image_width, image_height) * 0.016)))
     if runtime_position is not None:
         px, py = to_pixel(runtime_position[0], runtime_position[1])
-        draw.ellipse((px - 6, py - 6, px + 6, py + 6), fill=_RUNTIME_POSITION_COLOR)
+        draw.ellipse(
+            (
+                px - marker_radius,
+                py - marker_radius,
+                px + marker_radius,
+                py + marker_radius,
+            ),
+            fill=_RUNTIME_POSITION_COLOR,
+            outline=(255, 255, 255, 230),
+            width=max(2, marker_radius // 5),
+        )
     elif last_known_position is not None:
         # Retained fix from a previous session: a ring instead of a solid dot
         # so a stale position is distinguishable from live telemetry.
         px, py = to_pixel(last_known_position[0], last_known_position[1])
+        ring_radius = marker_radius + 2
+        halo_radius = ring_radius + 2
         draw.ellipse(
-            (px - 8, py - 8, px + 8, py + 8),
-            outline=_RUNTIME_POSITION_COLOR,
-            width=3,
+            (
+                px - halo_radius,
+                py - halo_radius,
+                px + halo_radius,
+                py + halo_radius,
+            ),
+            outline=(255, 255, 255, 230),
+            width=2,
         )
-        draw.ellipse((px - 2, py - 2, px + 2, py + 2), fill=_RUNTIME_POSITION_COLOR)
+        draw.ellipse(
+            (
+                px - ring_radius,
+                py - ring_radius,
+                px + ring_radius,
+                py + ring_radius,
+            ),
+            outline=_RUNTIME_POSITION_COLOR,
+            width=max(3, marker_radius // 3),
+        )
+        center_radius = max(3, marker_radius // 4)
+        draw.ellipse(
+            (
+                px - center_radius,
+                py - center_radius,
+                px + center_radius,
+                py + center_radius,
+            ),
+            fill=_RUNTIME_POSITION_COLOR,
+        )
 
     for zone in vector_map.zones:
         if len(zone.points) < 3 or not zone.name:

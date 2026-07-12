@@ -466,3 +466,115 @@ def test_offline_camera_returns_cached_image_without_refreshing() -> None:
     assert image == b"jpeg-last-fix"
     assert refresh_calls == []
     assert cache.last_image == b"jpeg-last-fix"
+
+
+def test_cached_frame_helpers_round_trip(tmp_path) -> None:
+    from custom_components.dreame_lawn_mower.map_cache import (
+        load_cached_frame,
+        save_cached_frame,
+    )
+
+    path = str(tmp_path / "frame.jpg")
+
+    assert load_cached_frame(path) is None
+
+    save_cached_frame(path, b"jpeg-one")
+    restored = load_cached_frame(path)
+    assert restored is not None
+    assert restored[0] == b"jpeg-one"
+    assert restored[1].tzinfo is not None
+
+    save_cached_frame(path, b"jpeg-two")
+    restored = load_cached_frame(path)
+    assert restored is not None
+    assert restored[0] == b"jpeg-two"
+
+    save_cached_frame(path, b"")
+    # An empty file is treated as no frame.
+    assert load_cached_frame(path) is None
+
+
+def test_stale_cached_frame_served_with_single_background_refresh() -> None:
+    import sys
+    import types
+
+    if "turbojpeg" not in sys.modules:
+        stub = types.ModuleType("turbojpeg")
+        stub.TurboJPEG = object
+        sys.modules["turbojpeg"] = stub
+    from custom_components.dreame_lawn_mower.camera import DreameLawnMowerMapCamera
+
+    cache = DreameLawnMowerMapCameraCache(ttl=timedelta(seconds=60))
+    cache.store_image(b"jpeg-stale")
+    cache.last_refresh_at = datetime.now(UTC) - timedelta(hours=1)
+
+    scheduled: list[object] = []
+
+    class _FakeTask:
+        def done(self) -> bool:
+            return False
+
+    def create_task(coro) -> _FakeTask:
+        scheduled.append(coro)
+        coro.close()
+        return _FakeTask()
+
+    entity = object.__new__(DreameLawnMowerMapCamera)
+    entity.coordinator = SimpleNamespace(data=SimpleNamespace(available=True))
+    entity._map_cache = cache
+    entity._frame_path = None
+    entity._last_persisted_frame = None
+    entity._map_refresh_task = None
+    entity.hass = SimpleNamespace(async_create_task=create_task)
+
+    first = asyncio.run(entity._async_get_map_image())
+    second = asyncio.run(entity._async_get_map_image())
+
+    assert first == b"jpeg-stale"
+    assert second == b"jpeg-stale"
+    # Only one background refresh gets scheduled while the first is in flight.
+    assert len(scheduled) == 1
+
+
+def test_fresh_cached_frame_served_without_any_refresh() -> None:
+    import sys
+    import types
+
+    if "turbojpeg" not in sys.modules:
+        stub = types.ModuleType("turbojpeg")
+        stub.TurboJPEG = object
+        sys.modules["turbojpeg"] = stub
+    from custom_components.dreame_lawn_mower.camera import DreameLawnMowerMapCamera
+
+    cache = DreameLawnMowerMapCameraCache(ttl=timedelta(seconds=60))
+    cache.store_image(b"jpeg-fresh")
+    cache.last_refresh_at = datetime.now(UTC)
+
+    entity = object.__new__(DreameLawnMowerMapCamera)
+    entity.coordinator = SimpleNamespace(data=SimpleNamespace(available=True))
+    entity._map_cache = cache
+    entity._frame_path = None
+    entity._last_persisted_frame = None
+    entity._map_refresh_task = None
+    entity.hass = SimpleNamespace(
+        async_create_task=lambda coro: (_ for _ in ()).throw(
+            AssertionError("no refresh expected for a fresh frame")
+        )
+    )
+
+    assert asyncio.run(entity._async_get_map_image()) == b"jpeg-fresh"
+
+
+def test_restored_frame_keeps_camera_available_offline() -> None:
+    cache = DreameLawnMowerMapCameraCache(ttl=timedelta(seconds=60))
+    cache.store_image(b"jpeg-restored")
+    snapshot = SimpleNamespace(
+        available=False,
+        mapping_available=True,
+        capabilities=("map",),
+    )
+
+    assert (
+        map_camera_available(snapshot, image_cached=cache.last_image is not None)
+        is True
+    )

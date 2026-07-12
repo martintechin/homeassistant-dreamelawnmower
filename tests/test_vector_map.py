@@ -594,3 +594,31 @@ def test_map_view_shows_robot_position_predicate() -> None:
     assert _map_view_shows_robot_position(marked) is True
     assert _map_view_shows_robot_position(unmarked) is False
     assert _map_view_shows_robot_position(no_image) is False
+
+
+def test_vector_map_renderer_markers_are_visible_at_card_scale() -> None:
+    from custom_components.dreame_lawn_mower.dreame_lawn_mower_client import (
+        vector_map as vector_map_module,
+    )
+
+    _RUNTIME_POSITION_COLOR = vector_map_module._RUNTIME_POSITION_COLOR
+
+    def orange_pixel_count(png: bytes) -> int:
+        target = _RUNTIME_POSITION_COLOR[:3]
+        with Image.open(BytesIO(png)) as image:
+            rgb = image.convert("RGB")
+            return sum(
+                1 for pixel in rgb.getdata() if pixel == target
+            )
+
+    vector_map = parse_batch_vector_map(_batch_payload())
+
+    live_png = render_vector_map_png(vector_map, runtime_position=(50, 40))
+    retained_png = render_vector_map_png(vector_map, last_known_position=(50, 40))
+
+    assert live_png is not None
+    assert retained_png is not None
+    # Canvas-relative sizing: both markers must cover a meaningful area so
+    # they stay visible when the frame is scaled down to a dashboard card.
+    assert orange_pixel_count(live_png) > 300
+    assert orange_pixel_count(retained_png) > 300

@@ -243,10 +243,10 @@ integration keeps its own record so you can still find the robot:
 - The map cameras keep serving their last rendered frame — including the
   position marker — while the mower is offline instead of becoming unavailable.
 
-The position sensors are persisted to disk and survive Home Assistant
-restarts. The cached camera frame is in-memory only, so after a restart the
-map image is unavailable until the mower comes back online, while the
-coordinate sensors still show the retained fix.
+The position sensors and the last rendered map frame are both persisted to
+disk and survive Home Assistant restarts. The map camera serves the cached
+frame instantly (including while the mower is offline) and refreshes it in
+the background instead of blocking dashboard loads on a cloud fetch.
 
 ## Schedules And Multiple Maps
 

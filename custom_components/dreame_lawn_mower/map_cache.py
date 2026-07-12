@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,33 @@ from typing import Any
 from .dreame_lawn_mower_client.models import DreameLawnMowerMapView
 
 MapViewRefresh = Callable[[], Awaitable[DreameLawnMowerMapView]]
+
+
+def load_cached_frame(path: str) -> tuple[bytes, datetime] | None:
+    """Load a persisted map frame and its save time, tolerating any failure."""
+    try:
+        with open(path, "rb") as handle:
+            image = handle.read()
+        saved_at = datetime.fromtimestamp(os.stat(path).st_mtime, tz=UTC)
+    except OSError:
+        return None
+    if not image:
+        return None
+    return image, saved_at
+
+
+def save_cached_frame(path: str, image: bytes) -> None:
+    """Persist a map frame atomically, tolerating any failure."""
+    temp_path = f"{path}.tmp"
+    try:
+        with open(temp_path, "wb") as handle:
+            handle.write(image)
+        os.replace(temp_path, path)
+    except OSError:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
 
 
 def map_camera_available(
