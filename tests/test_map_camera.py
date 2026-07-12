@@ -578,3 +578,89 @@ def test_restored_frame_keeps_camera_available_offline() -> None:
         map_camera_available(snapshot, image_cached=cache.last_image is not None)
         is True
     )
+
+
+def _map_camera_stub(cache, *, online=True, create_task=None):
+    import sys
+    import types
+
+    if "turbojpeg" not in sys.modules:
+        stub = types.ModuleType("turbojpeg")
+        stub.TurboJPEG = object
+        sys.modules["turbojpeg"] = stub
+    from custom_components.dreame_lawn_mower.camera import DreameLawnMowerMapCamera
+
+    entity = object.__new__(DreameLawnMowerMapCamera)
+    entity.coordinator = SimpleNamespace(data=SimpleNamespace(available=online))
+    entity._map_cache = cache
+    entity._frame_path = None
+    entity._last_persisted_frame = None
+    entity._map_refresh_task = None
+    entity._held_frame = cache.last_image
+    entity.hass = SimpleNamespace(
+        async_create_task=create_task
+        or (lambda coro: (_ for _ in ()).throw(AssertionError("unexpected task")))
+    )
+    return entity
+
+
+def test_held_frame_served_while_cache_is_rebuilding() -> None:
+    cache = DreameLawnMowerMapCameraCache(ttl=timedelta(seconds=60))
+    cache.store_image(b"jpeg-good")
+
+    scheduled: list[object] = []
+
+    def create_task(coro):
+        scheduled.append(coro)
+        coro.close()
+        return SimpleNamespace(done=lambda: False)
+
+    entity = _map_camera_stub(cache, create_task=create_task)
+    # First request records the held frame.
+    assert asyncio.run(entity._async_get_map_image()) == b"jpeg-good"
+    # A refresh clears the cached image mid-flight (store_view behavior).
+    cache.last_image = None
+
+    served = asyncio.run(entity._async_get_map_image())
+
+    # The held frame is served instantly instead of blocking on the cloud.
+    assert served == b"jpeg-good"
+    assert len(scheduled) >= 1
+
+
+def test_failed_refresh_restores_held_frame_into_cache() -> None:
+    cache = DreameLawnMowerMapCameraCache(ttl=timedelta(seconds=60))
+    cache.store_image(b"jpeg-good")
+    entity = _map_camera_stub(cache)
+
+    async def failing_refresh():
+        # Mirrors _async_refresh_map_view's error path, which wipes the image.
+        return cache.store_error("cloud unavailable")
+
+    entity._async_refresh_map_view = failing_refresh
+    entity.async_write_ha_state = lambda: None
+
+    served = asyncio.run(entity._async_fetch_map_image())
+
+    assert served == b"jpeg-good"
+    assert cache.last_image == b"jpeg-good"
+    assert entity.available is True
+
+
+def test_offline_with_wiped_cache_still_serves_held_frame() -> None:
+    cache = DreameLawnMowerMapCameraCache(ttl=timedelta(seconds=60))
+    cache.store_image(b"jpeg-good")
+    cache.last_refresh_at = datetime.now(UTC)
+    entity = _map_camera_stub(cache, online=True)
+    assert asyncio.run(entity._async_get_map_image()) == b"jpeg-good"
+
+    # Robot dies right after a refresh wiped the cache.
+    cache.store_error("robot went offline")
+    entity.coordinator.data = SimpleNamespace(
+        available=False,
+        mapping_available=True,
+        capabilities=("map",),
+    )
+
+    assert asyncio.run(entity._async_get_map_image()) == b"jpeg-good"
+    assert entity.available is True

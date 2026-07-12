@@ -99,13 +99,20 @@ class DreameLawnMowerMapCamera(
         self._frame_path = frame_path
         self._last_persisted_frame: bytes | None = None
         self._map_refresh_task: asyncio.Task | None = None
+        # Entity-held copy of the last good frame: survives the cache being
+        # cleared mid-refresh or by a failed refresh, so the map camera never
+        # blocks on the cloud or loses the retained map while running.
+        self._held_frame: bytes | None = map_cache.last_image
 
     @property
     def available(self) -> bool:
         """Return whether the entity can reasonably provide a map."""
         return map_camera_available(
             self.coordinator.data,
-            image_cached=self._map_cache.last_image is not None,
+            image_cached=(
+                self._map_cache.last_image is not None
+                or self._held_frame is not None
+            ),
             requires_map_capability=self._requires_map_capability,
         )
 
@@ -155,12 +162,18 @@ class DreameLawnMowerMapCamera(
         if snapshot is None or not getattr(snapshot, "available", False):
             # While offline a refresh would fail and wipe the cached frame;
             # keep returning the last image with the final robot position.
-            return self._map_cache.last_image
+            return self._map_cache.last_image or self._held_frame
         cached = self._map_cache.last_image
         if cached is not None:
+            self._held_frame = cached
             if not self._map_cache.is_fresh():
                 self._schedule_background_map_refresh()
             return cached
+        if self._held_frame is not None:
+            # A refresh is rebuilding the cache (or the last one failed);
+            # keep serving the held frame instead of blocking on the cloud.
+            self._schedule_background_map_refresh()
+            return self._held_frame
         return await self._async_fetch_map_image()
 
     def _schedule_background_map_refresh(self) -> None:
@@ -187,6 +200,7 @@ class DreameLawnMowerMapCamera(
                     view.image_png,
                 )
                 self._map_cache.store_image(image)
+                self._held_frame = image
                 self._map_cache.last_error = None
                 self.async_write_ha_state()
                 await self._async_persist_frame(image)
@@ -196,6 +210,11 @@ class DreameLawnMowerMapCamera(
                 self._map_cache.last_error = str(err)
                 self.async_write_ha_state()
 
+        if self._map_cache.last_image is None and self._held_frame is not None:
+            # A failed or imageless refresh wiped the cache; restore the last
+            # good frame so the camera never loses the retained map.
+            self._map_cache.store_image(self._held_frame)
+            self.async_write_ha_state()
         if self._map_cache.last_image is not None:
             return self._map_cache.last_image
         return await self.hass.async_add_executor_job(
